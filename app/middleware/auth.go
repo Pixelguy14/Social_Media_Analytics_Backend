@@ -50,6 +50,7 @@ func AuthMiddleware() gin.HandlerFunc {
 		if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
 			// Inject the data into the Gin Context
 			// You can now access "userID" in any controller downstream
+			c.Set("userRole", claims["role"])
 			c.Set("userID", claims["sub"])
 			c.Set("userEmail", claims["email"])
 		} else {
@@ -69,11 +70,13 @@ func AuthMiddleware() gin.HandlerFunc {
 // AdminOnly assumes AuthMiddleware has already run and set "userRole" in the context
 func AdminOnly() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Retrieve the role set by AuthMiddleware
 		role, exists := c.Get("userRole")
 
-		if !exists || role != "admin" {
-			// Use Abort to prevent the request from reaching the controller
+		// Defensive check: Convert interface to string safely
+		roleStr, ok := role.(string)
+
+		if !exists || !ok || roleStr != "admin" {
+			log.Printf("Access Denied: User has role %v, expected 'admin'", role)
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
 				"error": "Access denied: Admin privileges required",
 			})

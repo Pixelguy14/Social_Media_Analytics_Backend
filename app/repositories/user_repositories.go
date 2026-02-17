@@ -16,6 +16,7 @@ type UserRepository interface {
 	GetByEmail(ctx context.Context, email string) (*models.User, error)
 	GetAllUsernames(ctx context.Context) ([]string, error) // for bloom filtering
 	GetAllEmails(ctx context.Context) ([]string, error)    // for bloom filtering
+	GetAllUsers(ctx context.Context) ([]models.User, error)
 	ExistsByUsername(ctx context.Context, username string) (bool, error)
 	ExistsByEmail(ctx context.Context, username string) (bool, error)
 	Update(ctx context.Context, id string, user models.User) error
@@ -172,6 +173,35 @@ func (r *FirestoreUserRepository) GetByEmail(ctx context.Context, email string) 
 	}
 	user.ID = doc.Ref.ID // Don't forget to map the Document ID!
 	return &user, nil
+}
+
+// GetAll retrieves all users and their data from the Firestore database.
+func (r *FirestoreUserRepository) GetAllUsers(ctx context.Context) ([]models.User, error) {
+	var users []models.User
+	iter := r.client.Collection("users").Documents(ctx)
+	defer iter.Stop()
+
+	for {
+		doc, err := iter.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		var user models.User
+		if err := doc.DataTo(&user); err != nil {
+			// log.Printf("Warning: Failed to parse user %s: %v", doc.Ref.ID, err)
+			continue
+		}
+
+		// MANUALLY SET THE ID HERE
+		user.ID = doc.Ref.ID
+
+		users = append(users, user)
+	}
+	return users, nil
 }
 
 // Update updates an existing user in the Firestore database.

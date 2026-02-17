@@ -58,15 +58,16 @@ func (s *UserService) Create(user models.User) error {
 	}
 	user.Password = string(hashedPassword)
 
-	// 3. Persist
+	// 3. we auto set role from new users to "user" to avoid them giving themselves privileges
+	user.Role = "user"
+
+	// 4. Persist
 	err = s.Repo.Create(context.Background(), user)
 	if err == nil {
-		// 4. Update Bloom Filters upon success
+		// 5. Update Bloom Filters upon success
 		s.UsernameFilter.Insert([]byte(user.Username))
 		s.EmailFilter.Insert([]byte(user.Email))
 	}
-	// 5. we auto set role from new users to "user" to avoid them giving themselves privileges
-	user.Role = "user"
 	return err
 }
 
@@ -130,18 +131,29 @@ func (s *UserService) UpdateUser(id string, user models.User) error {
 func (s *UserService) UpdateUserFields(id string, updates map[string]interface{}) error {
 	ctx := context.Background()
 
-	// 1. Handle Username Change (Validation + Bloom Filter)
+	// 1. Fetch current user to compare values
+	currentUser, err := s.Repo.GetByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("user not found: %w", err)
+	}
+	// 2. Handle Username Change
 	if newUsername, ok := updates["username"].(string); ok && newUsername != "" {
-		// Only check if it's actually different (optional but recommended)
-		taken, err := s.IsUsernameTaken(newUsername)
-		if err != nil {
-			return err
+		// Only check if the username is DIFFERENT from the current one
+		if newUsername != currentUser.Username {
+			taken, err := s.IsUsernameTaken(newUsername)
+			if err != nil {
+				return err
+			}
+			if taken {
+				// Double check it's not a false positive or some other issue
+				return errors.New("new username already exists")
+			}
+			// Insert into Bloom Filter
+			s.UsernameFilter.Insert([]byte(newUsername))
+		} else {
+			// key is present but value is the same, remove it from updates to save DB write
+			delete(updates, "username")
 		}
-		if taken {
-			return errors.New("new username already exists")
-		}
-		// Insert into Bloom Filter
-		s.UsernameFilter.Insert([]byte(newUsername))
 	}
 
 	// 2. Handle Password Change (Hashing)
@@ -178,6 +190,11 @@ func (s *UserService) GetUserByID(id string) (*models.User, error) {
 	}
 
 	return user, nil
+}
+
+// Retrieve all available users
+func (s *UserService) GetAllUsers(ctx context.Context) ([]models.User, error) {
+	return s.Repo.GetAllUsers(ctx)
 }
 
 func (s *UserService) DeleteUser(id string) error {

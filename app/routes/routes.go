@@ -26,6 +26,7 @@ func InitializeUserRoutes(r *gin.Engine, uc *controllers.UserController) {
 		admin := protected.Group("/admin")
 		admin.Use(middleware.AdminOnly())
 		{
+			admin.GET("/users", uc.GetAllUsers)
 			// Example: An admin-only feature that regular users can't even attempt
 			// admin.GET("/dashboard-stats", uc.GetSystemStats)
 			// admin.POST("/users/:id/suspend", uc.SuspendUser)

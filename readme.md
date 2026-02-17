@@ -1,6 +1,6 @@
 # DataTracker: Social Media Analytics Backend
 
-A robust, scalable, and efficient backend for analyzing social media data, built with Go and Firebase Firestore. This platform is designed to handle high write loads while ensuring data consistency and reliability across a distributed architecture.
+A robust, scalable, and efficient backend for analyzing social media data, built with Go and Firebase Firestore. This platform's objectibe is to be a design capable of handling high write loads while ensuring data consistency and reliability across a distributed architecture.
 
 ## Table of Contents
 
@@ -12,7 +12,6 @@ A robust, scalable, and efficient backend for analyzing social media data, built
   - [Advanced Data Structures](#advanced-data-structures)
 - [Installation and Setup](#installation-and-setup)
 - [Running the Application](#running-the-application)
-- [Monitoring & Operations](#monitoring--operations)
 
 ## Project Overview
 

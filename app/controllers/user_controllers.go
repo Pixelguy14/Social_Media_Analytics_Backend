@@ -63,14 +63,26 @@ func (uc *UserController) Login(c *gin.Context) {
 
 // CreateUser handles POST /api/users/
 func (uc *UserController) CreateUser(c *gin.Context) {
-	var user models.User
-	if err := c.ShouldBindJSON(&user); err != nil {
+	// 1. Create a dedicated struct to capture the password
+	var req struct {
+		Username string `json:"username" binding:"required"`
+		Email    string `json:"email" binding:"required"`
+		Password string `json:"password" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request payload"})
 		return
 	}
 
+	// 2. Map it to the user model
+	user := models.User{
+		Username: req.Username,
+		Email:    req.Email,
+		Password: req.Password,
+	}
+
 	if err := uc.service.Create(user); err != nil {
-		// Return 409 Conflict if user already exists
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		return
 	}
@@ -97,6 +109,21 @@ func (uc *UserController) GetUser(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, user)
+}
+
+// GetAllUsers handles GET /api/users/
+func (uc UserController) GetAllUsers(c *gin.Context) {
+	// The AdminOnly middleware already handles the role check.
+	// We just need to call the service.
+
+	// Pass the context from Gin to the service/repo for Firestore
+	users, err := uc.service.GetAllUsers(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve users: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, users)
 }
 
 // UpdateUser handles PUT /api/users/:id
