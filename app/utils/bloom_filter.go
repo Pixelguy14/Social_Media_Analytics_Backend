@@ -100,6 +100,13 @@ func (bf *BloomFilter) Contains(key []byte) bool {
 	return true
 }
 
+// Clear resets all bits in the filter to zero.
+func (bf *BloomFilter) Clear() {
+	for i := range bf.bits.data {
+		bf.bits.data[i] = 0
+	}
+}
+
 // ConcurrentBloomFilter provides a thread-safe wrapper around the Bloom Filter for concurrent access.
 type ConcurrentBloomFilter struct {
 	mu    sync.RWMutex // Mutex to protect concurrent access to the Bloom Filter.
@@ -128,4 +135,11 @@ func (cbf *ConcurrentBloomFilter) Contains(key []byte) bool {
 	defer cbf.mu.RUnlock()
 	// Call the Contains method of the underlying Bloom Filter.
 	return cbf.bloom.Contains(key)
+}
+
+// Clear resets the filter bits and provides thread-safe clearing.
+func (cbf *ConcurrentBloomFilter) Clear() {
+	cbf.mu.Lock()
+	defer cbf.mu.Unlock()
+	cbf.bloom.Clear()
 }

@@ -33,3 +33,37 @@ func InitializeUserRoutes(r *gin.Engine, uc *controllers.UserController) {
 		}
 	}
 }
+
+func InitializeInkRoutes(r *gin.Engine, ic *controllers.InkController) {
+	inkGrp := r.Group("/api/inktochat")
+	{
+		// 1. PUBLIC
+		inkGrp.POST("/token", ic.GetToken)
+		inkGrp.GET("/spam", ic.GetSpamDrops)
+
+		// 2. ADMIN ONLY
+		adminStats := inkGrp.Group("/analytics")
+		adminStats.Use(middleware.AuthMiddleware(), middleware.AdminOnly())
+		{
+			adminStats.GET("/", ic.GetAnalytics)
+			adminStats.POST("/reset", ic.ResetSystem)
+			adminStats.POST("/clear-chats", ic.ClearLobbies)
+		}
+
+		// 3. PROTECTED (Messaging & Drawing)
+		// We allow anonymous/guest users here as long as they have a custom token? 
+		// Actually, the user has been using them as PUBLIC but with internal rate limits.
+		// Let's keep them in the root of inkGrp for now as per previous main.go state.
+		inkGrp.POST("/draw", ic.PostDrawing)
+		inkGrp.POST("/message", ic.PostMessage)
+
+		// 4. AUTHENTICATED USERS ONLY (Personal Save Gallery)
+		drawingsGrp := inkGrp.Group("/drawings")
+		drawingsGrp.Use(middleware.AuthMiddleware())
+		{
+			drawingsGrp.POST("", ic.SavePersonalDrawing)
+			drawingsGrp.GET("", ic.GetPersonalDrawings)
+			drawingsGrp.DELETE("/:id", ic.DeletePersonalDrawing)
+		}
+	}
+}

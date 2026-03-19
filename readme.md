@@ -1,105 +1,83 @@
-# DataTracker: Social Media Analytics Backend
+# DataTracker: Social Media Analytics Backend & InkToChat: Pictochat Replication (V3)
 
-A robust, scalable, and efficient backend for analyzing social media data, built with Go and Firebase Firestore. This platform's objectibe is to be a design capable of handling high write loads while ensuring data consistency and reliability across a distributed architecture.
+**InkToChat** is a modern, distributed replication of the classic Nintendo DS Pictochat experience. It leverages a **Go-based orchestration layer** for business logic and validation, combined with **Firebase (Firestore & Realtime DB)** for global state management and real-time synchronization.
 
-## Table of Contents
+## Project Objective
+Replicate real-time text and image communication across four persistent lobbies (A, B, C, & D) while enforcing hardware-inspired constraints:
+- **100-Message Circular Buffer:** A Go worker automatically prunes the oldest message when a room exceeds 100 entries.
+- **1-Bit Drawing Validation:** Strictly validates binary-encoded drawings (256x192 px, Black/White) to ensure payload integrity (exactly 6,144 bytes per drawing).
+- **Zero-Friction Auth:** Anonymous username reservation backed by a **Bloom Filter** to minimize database lookups.
+- **Global Localization:** Support for 10 languages (EN, DE, FR, ES, IT, JP, HU, FI, PT, NL).
 
-- [Project Overview](#project-overview)
-- [Core Architecture & Technologies](#core-architecture--technologies)
-- [Key Design Concepts](#key-design-concepts)
-  - [Replication Strategies](#replication-strategies)
-  - [Consistency Models](#consistency-models)
-  - [Advanced Data Structures](#advanced-data-structures)
-- [Installation and Setup](#installation-and-setup)
-- [Running the Application](#running-the-application)
+## Technical Architecture
+InkToChat follows a **Hybrid Cloud Architecture**, separating managed synchronization from custom business rules.
 
-## Project Overview
+### Go Orchestration Layer (The Gatekeeper)
+- **Auth (Bloom Filter):** Uses a read-optimized negative cache in RAM to check username availability before hitting Firestore.
+- **Worker (Circular Buffer):** A background Go routine monitors Firestore collections and enforces the 100-message limit per room.
+- **Validation (Bit-Array):** Ensures drawing blobs match the 6,144-byte constraint before they are written to the database.
+- **Rate Limiting:** Implements a **Token Bucket** algorithm to protect Firebase free-tier quotas.
+- **i18n:** Server-side localization for system messages using `nicksnyder/go-i18n`.
 
-A robust, scalable, and efficient backend for analyzing social media data, built with Go and Firebase Firestore. This platform is designed to handle high write loads while ensuring data consistency and reliability across a distributed architecture.
+- **Security Rules:** Prevents users from spoofing others' usernames.
 
-## Core Architecture & Technologies
+## System Integration (The Binding)
+InkToChat is not just a standalone toy; it is **deeply integrated** with the DataTracker analytics engine to prove the scalability of a unified architecture:
+- **Unified Identity:** The Go Gatekeeper automatically identifies if a lobby user exists in the persistent `DataTracker` database. If they do, their session is linked to their permanent profile ID.
+- **Engagement Engine:** Every drawing and message is asynchronously tracked by a custom **Analytics Service**. This transforms volatile chat activity into persistent business metrics (e.g., "Hourly Engagement Rate," "User Creativity Index").
+- **Shared Infrastructure:** Both systems share the same Firestore client, unified logging (`slog`), and a centralized rate-limiting manager, demonstrating professional resource reuse.
 
-This project follows **Clean Architecture (N-Tier)** principles to decouple business logic from the database provider:
--   **Models:** Pure data structures with `json` and `firestore` tags.
--   **Repositories:** Dedicated layer for Firestore SDK operations (Queries, Selects, and CRUD).
--   **Language & Framework:** **Go** with the **Gin** web framework for building high-performance REST APIs.
--   **Services:** The "Brain" of the app. Handles Bcrypt hashing, JWT logic coordination, and Bloom Filter checks.
--   **Controllers:** The core business logic of the application.
--   **Middleware:** A custom JWT interceptor that verifies tokens and injects the userID into the request context.
-
-## Key Design Concepts
-
-DataTracker leverages distributed systems concepts to balance performance and cost-efficiency.
-
-### Replication Strategies
-
-While Firestore handles the physical replication, our Go backend is architected to respect these models:
-
--   **Multi-Leader Replication:** By using Firestore in Native Mode, data is automatically replicated across multiple geographic regions to survive regional outages.
--   **Leaderless Replication:** Our Event Ingestion is designed to be idempotent. Using Firestore's Set operations allows us to treat writes as leaderless-style updates where the "latest" timestamp wins.
--   **Single-Leader Replication:** For critical user operations (like account creation), we utilize Firestore’s primary leader for Strong Consistency to ensure two people can't claim the same username at the exact same millisecond.
-
-### Consistency Models
-
--   **Consistent Prefix Reads:** Implemented for user profiles. When a user updates their password or name, the Service Layer ensures the next GET request retrieves the updated document directly from the primary shard.
--   **Eventual Consistency:** Used for analytical counters and public social feeds, allowing the system to scale globally without waiting for every secondary node to sync.
-
-### Advanced Data Structures
-
--   **Dual Bloom Filters:** To minimize Firestore "Egress" costs and "Read" quotas, we use a Concurrent Bloom Filter as a Read-Optimized Negative Cache.
-    -   **logic:** Before querying Firestore to see if an email/username is taken, the system checks a bitset in RAM (O(1) time).
-    -   **warm-up:** On server startup, the system performs a "Projection Query" to populate the filter with existing identifiers.
-
----
-
-## Installation and Setup
-
-Follow these steps to get the DataTracker backend running on your local machine.
+## Installation & Setup
 
 ### Prerequisites
+- [Go](https://go.dev/doc/install) (v1.25+)
+- [Firebase CLI](https://firebase.google.com/docs/cli)
+- A Google Cloud Project with Firestore and Auth enabled.
 
-- [Go](https://go.dev/doc/install) (version 1.18 or newer)
-- A Google Cloud Project with **Firestore** enabled.
-- [Postman](https://www.postman.com/downloads/) for API testing.
 
 ### 1. Google Cloud & Firestore Initialization
+
 Before the code can connect, you must manually prepare the environment:
-1.  **Enable Firestore API:** Visit the [Google API Console](https://console.cloud.google.com/apis/api/firestore.googleapis.com/) and enable the API for your project.
-2.  **Create Database:** Go to the [Firestore Tab](https://console.cloud.google.com/datastore/setup), select **Native Mode**, and choose a geographic region near you.
-3.  **Generate Service Account:** - Navigate to **Project Settings > Service Accounts**.
-    - Click **Generate New Private Key** (JSON).
-    - Rename this file to `firebaseServiceAccount.json` and place it in the `config/` directory.
+
+1. **Enable Firestore API:** Visit the [Google API Console](https://console.cloud.google.com/apis/api/firestore.googleapis.com/) and enable the API for your project.
+
+2. **Create Database:** Go to the [Firestore Tab](https://console.cloud.google.com/datastore/setup), select **Native Mode**, and choose a geographic region near you.
+
+3. **Generate Service Account:** - Navigate to **Project Settings > Service Accounts**.
+
+- Click **Generate New Private Key** (JSON).
+
+- Rename this file to `firebaseServiceAccount.json` and place it in the `config/` directory.
+
 
 ### 2. Environment Configuration
+
 Create a file named `.env` inside the `config/` folder and add your JWT secret:
+
 ```env
+
 JWT_SECRET_KEY=your_random_secure_string_here
+
 GOOGLE_APPLICATION_CREDENTIALS=config/firebaseServiceAccount.json
-```
 
-### 3. Install Dependencies
+``` 
 
-The project uses Go Modules to manage dependencies. Run the following commands to download and install the required packages:
+### 1. Configuration
+1. Initialize dependencies: `go mod tidy`
+2. Set up your `.env` in `config/`
 
+### 2. Running Locally
 ```bash
-go get github.com/gin-gonic/gin
-go get firebase.google.com/go/v4
-go get cloud.google.com/go/firestore
-go get golang.org/x/crypto/bcrypt
-go get github.com/joho/godotenv
-go get github.com/golang-jwt/jwt/v5
-go get github.com/gin-contrib/cors
-go mod tidy
-```
-
----
-
-## Running the Application
-
-Once the setup is complete, you can run the server:
-
-```bash
+# Start the Go Backend (Port 8081)
 go run main.go
+
+# (Optional) Verify security rules with emulator
+firebase emulators:start
 ```
 
-The server should start, and you will see output from the Gin framework indicating it is listening for requests on `localhost:8081`. Watch the logs to confirm the Bloom Filter successfully loads existing usernames and emails from Firestore.
+## Admin Analytics
+The secondary frontend tasks include building an admin panel to monitor:
+- **Active Connections:** Snapshot of current presence via RTDB.
+- **Buffer Health:** Monitoring Firestore document counts per lobby.
+- **Spam Metrics:** Rate-limiter drop events to identify malicious behavior.
+- **Namespace Saturation:** Tracking Bloom Filter utilization.

@@ -10,6 +10,7 @@ type User struct {
 	Email    string `json:"email" firestore:"email"`
 	Username string `json:"username" firestore:"username"`
 	Role     string `json:"role" firestore:"role"`
+	Color    string `json:"color" firestore:"color"`
 
 	// json:"-" prevents the password from being sent in API responses.
 	// firestore:"password" stores the hashed value in the database.
