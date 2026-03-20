@@ -22,6 +22,11 @@ type UserRepository interface {
 	Update(ctx context.Context, id string, user models.User) error
 	UpdateFields(ctx context.Context, id string, updates map[string]interface{}) error
 	Delete(ctx context.Context, id string) error
+
+	// Password Reset Tokens
+	SaveResetToken(ctx context.Context, token models.PasswordResetToken) error
+	GetResetTokenByHash(ctx context.Context, hashedToken string) (*models.PasswordResetToken, error)
+	DeleteResetToken(ctx context.Context, hashedToken string) error
 }
 
 // It’s better to pass the context from the Controller → Service → Repository so that if a user cancels their request, the database query stops immediately.
@@ -235,4 +240,28 @@ func (r *FirestoreUserRepository) Delete(ctx context.Context, id string) error {
 		return err
 	}
 	return nil
+}
+// Password Reset Token Implementations
+
+func (r *FirestoreUserRepository) SaveResetToken(ctx context.Context, token models.PasswordResetToken) error {
+	// Use hashed token as document ID for easy lookup
+	_, err := r.client.Collection("password_reset_tokens").Doc(token.HashedToken).Set(ctx, token)
+	return err
+}
+
+func (r *FirestoreUserRepository) GetResetTokenByHash(ctx context.Context, hashedToken string) (*models.PasswordResetToken, error) {
+	doc, err := r.client.Collection("password_reset_tokens").Doc(hashedToken).Get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var token models.PasswordResetToken
+	if err := doc.DataTo(&token); err != nil {
+		return nil, err
+	}
+	return &token, nil
+}
+
+func (r *FirestoreUserRepository) DeleteResetToken(ctx context.Context, hashedToken string) error {
+	_, err := r.client.Collection("password_reset_tokens").Doc(hashedToken).Delete(ctx)
+	return err
 }

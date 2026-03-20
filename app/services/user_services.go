@@ -5,8 +5,13 @@ import (
 	"DataTracker/app/repositories"
 	"DataTracker/app/utils"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"time"
+	"unicode"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -40,6 +45,27 @@ func (s *UserService) IsEmailTaken(email string) (bool, error) {
 	return s.Repo.ExistsByEmail(context.Background(), email)
 }
 
+// IsPasswordSecure handles unicode characters for international support (Ñ, Á, Ç, etc.)
+func IsPasswordSecure(password string) bool {
+	if len(password) < 8 {
+		return false
+	}
+
+	var hasUpper, hasNumber bool
+	for _, r := range password {
+		if unicode.IsUpper(r) { // This catches Ñ, Á, Ç, etc.
+			hasUpper = true
+		}
+		if unicode.IsDigit(r) {
+			hasNumber = true
+		}
+		if hasUpper && hasNumber {
+			return true
+		}
+	}
+	return false
+}
+
 // --- CRUD Operations ---
 
 func (s *UserService) Create(user models.User) error {
@@ -51,8 +77,13 @@ func (s *UserService) Create(user models.User) error {
 		return fmt.Errorf("email already exists")
 	}
 
+	// 1.5 Validate Password Complexity
+	if !IsPasswordSecure(user.Password) {
+		return fmt.Errorf("password insecure: must be 8+ chars with at least 1 number and 1 uppercase letter")
+	}
+
 	// 2. Hash Password
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(user.Password), 12)
 	if err != nil {
 		return err
 	}
@@ -107,8 +138,12 @@ func (s *UserService) UpdateUser(id string, user models.User) error {
 
 	// 2. Logic for Password Change
 	if user.Password != "" {
+		// Validate Complexity before hashing
+		if !IsPasswordSecure(user.Password) {
+			return errors.New("new password insecure: must be 8+ chars with 1 number and 1 uppercase")
+		}
 		// Hash the NEW password
-		hashedPassword, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
+		hashedPassword, err := bcrypt.GenerateFromPassword([]byte(user.Password), 12)
 		if err != nil {
 			return fmt.Errorf("failed to hash password: %w", err)
 		}
@@ -158,7 +193,11 @@ func (s *UserService) UpdateUserFields(id string, updates map[string]interface{}
 
 	// 2. Handle Password Change (Hashing)
 	if rawPassword, ok := updates["password"].(string); ok && rawPassword != "" {
-		hashedPassword, err := bcrypt.GenerateFromPassword([]byte(rawPassword), bcrypt.DefaultCost)
+		// Validate Complexity
+		if !IsPasswordSecure(rawPassword) {
+			return errors.New("new password insecure: must be 8+ chars with 1 number and 1 uppercase")
+		}
+		hashedPassword, err := bcrypt.GenerateFromPassword([]byte(rawPassword), 12)
 		if err != nil {
 			return fmt.Errorf("failed to hash password: %w", err)
 		}
@@ -213,4 +252,69 @@ func (s *UserService) DeleteUser(id string) error {
 
 	// We don't remove from Bloom Filter because standard Bloom Filters don't support deletion.
 	return nil
+}
+
+// --- Security Operations: Password Resets ---
+
+func (s *UserService) InitiatePasswordReset(ctx context.Context, userID string) (string, error) {
+	// 1. Generate Raw Token (32 bytes high entropy)
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("cryptographic failure: %v", err)
+	}
+	rawToken := hex.EncodeToString(raw)
+
+	// 2. Hash Token (SHA-256) for DB storage
+	hash := sha256.Sum256([]byte(rawToken))
+	hashedToken := hex.EncodeToString(hash[:])
+
+	// 3. Persist to DB
+	token := models.PasswordResetToken{
+		UserID:      userID,
+		HashedToken: hashedToken,
+		ExpiresAt:   time.Now().Add(1 * time.Hour),
+	}
+
+	if err := s.Repo.SaveResetToken(ctx, token); err != nil {
+		return "", err
+	}
+
+	return rawToken, nil
+}
+
+func (s *UserService) CompletePasswordReset(ctx context.Context, rawToken string, newPassword string) error {
+	// 1. Hash incoming rawToken to find it
+	hash := sha256.Sum256([]byte(rawToken))
+	hashedToken := hex.EncodeToString(hash[:])
+
+	// 2. Retrieve Token from DB
+	tokenRecord, err := s.Repo.GetResetTokenByHash(ctx, hashedToken)
+	if err != nil {
+		return errors.New("invalid or expired password reset link")
+	}
+
+	// 3. ONE-TIME USE: Delete immediately regardless of outcome
+	defer s.Repo.DeleteResetToken(ctx, hashedToken)
+
+	// 4. Validate Expiration
+	if time.Now().After(tokenRecord.ExpiresAt) {
+		return errors.New("reset link has expired")
+	}
+
+	// 5. Validate New Password Complexity
+	if !IsPasswordSecure(newPassword) {
+		return errors.New("new password does not meet complexity requirements")
+	}
+
+	// 6. Hash and Update User Record
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(newPassword), 12)
+	if err != nil {
+		return err
+	}
+
+	updates := map[string]interface{}{
+		"password": string(hashedPassword),
+	}
+
+	return s.Repo.UpdateFields(ctx, tokenRecord.UserID, updates)
 }

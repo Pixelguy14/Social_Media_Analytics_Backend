@@ -1,23 +1,25 @@
 package controllers
 
 import (
+	"crypto/rsa"
 	"net/http"
-	"os"
 	"time"
 
 	"DataTracker/app/models"
 	"DataTracker/app/services"
+	"DataTracker/app/utils"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 )
 
 type UserController struct {
-	service *services.UserService
+	service    *services.UserService
+	privateKey *rsa.PrivateKey
 }
 
-func NewUserController(service *services.UserService) *UserController {
-	return &UserController{service: service}
+func NewUserController(service *services.UserService, privateKey *rsa.PrivateKey) *UserController {
+	return &UserController{service: service, privateKey: privateKey}
 }
 
 // Login handles POST /api/users/login
@@ -39,16 +41,16 @@ func (uc *UserController) Login(c *gin.Context) {
 		return
 	}
 
-	// 2. Generate JWT Token
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub":   user.ID,
-		"email": user.Email,
-		"role":  user.Role,
-		"exp":   time.Now().Add(time.Hour * 24).Unix(), // Token expires in 24h
+	// 2. Generate RS256 JWT Token
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
+		"sub":      user.ID,
+		"email":    user.Email,
+		"username": user.Username, // Cryptographic proof of username for InkToChat
+		"role":     user.Role,
+		"exp":      time.Now().Add(time.Hour * 24).Unix(), // Token expires in 24h
 	})
 
-	secretKey := os.Getenv("JWT_SECRET_KEY")
-	tokenString, err := token.SignedString([]byte(secretKey))
+	tokenString, err := token.SignedString(uc.privateKey)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Could not generate token"})
 		return
@@ -65,6 +67,7 @@ func (uc *UserController) Login(c *gin.Context) {
 func (uc *UserController) CreateUser(c *gin.Context) {
 	// 1. Create a dedicated struct to capture the password
 	var req struct {
+		Name     string `json:"name" binding:"required"`
 		Username string `json:"username" binding:"required"`
 		Email    string `json:"email" binding:"required"`
 		Password string `json:"password" binding:"required"`
@@ -77,6 +80,7 @@ func (uc *UserController) CreateUser(c *gin.Context) {
 
 	// 2. Map it to the user model
 	user := models.User{
+		Name:     req.Name,
 		Username: req.Username,
 		Email:    req.Email,
 		Password: req.Password,
@@ -91,16 +95,9 @@ func (uc *UserController) CreateUser(c *gin.Context) {
 }
 
 // GetUser handles GET /api/users/:id
+// Ownership is enforced by the OwnerOrAdmin middleware before this handler runs.
 func (uc *UserController) GetUser(c *gin.Context) {
-	// SECURITY: Get ID from the middleware context (set in auth.go)
-	loggedInID, _ := c.Get("userID")
 	requestedID := c.Param("id")
-
-	// Optional: Only allow users to see their own data
-	if loggedInID != requestedID {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
-		return
-	}
 
 	user, err := uc.service.GetUserByID(requestedID)
 	if err != nil {
@@ -127,18 +124,12 @@ func (uc UserController) GetAllUsers(c *gin.Context) {
 }
 
 // UpdateUser handles PUT /api/users/:id
+// Ownership is enforced by the OwnerOrAdmin middleware before this handler runs.
 func (uc *UserController) UpdateUser(c *gin.Context) {
 	requestedID := c.Param("id")
-	loggedInID, _ := c.Get("userID")
 	userRole, _ := c.Get("userRole")
 
-	// 1. Security Check
-	if loggedInID != requestedID && userRole != "admin" {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Unauthorized to update this user"})
-		return
-	}
-
-	// 2. Bind to a map instead of the User struct
+	// 1. Bind to a map instead of the User struct
 	// This captures ONLY the fields provided in the JSON body
 	var updates map[string]interface{}
 	if err := c.ShouldBindJSON(&updates); err != nil {
@@ -146,12 +137,12 @@ func (uc *UserController) UpdateUser(c *gin.Context) {
 		return
 	}
 
-	// 3. Security: Prevent non-admins from promoting themselves
+	// 2. Security: Prevent non-admins from promoting themselves
 	if userRole != "admin" {
 		delete(updates, "role")
 	}
 
-	// 4. Call Service with the map
+	// 3. Call Service with the map
 	if err := uc.service.UpdateUserFields(requestedID, updates); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -161,16 +152,9 @@ func (uc *UserController) UpdateUser(c *gin.Context) {
 }
 
 // DeleteUser handles DELETE /api/users/:id
+// Ownership is enforced by the OwnerOrAdmin middleware before this handler runs.
 func (uc *UserController) DeleteUser(c *gin.Context) {
-	loggedInID, _ := c.Get("userID")
-	userRole, _ := c.Get("userRole") // Get role from middleware
 	requestedID := c.Param("id")
-
-	// Logic: Allow if the user is the owner OR if the user is an admin
-	if loggedInID != requestedID && userRole != "admin" {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Unauthorized to delete this user"})
-		return
-	}
 
 	if err := uc.service.DeleteUser(requestedID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete user"})
@@ -181,3 +165,95 @@ func (uc *UserController) DeleteUser(c *gin.Context) {
 	// This acts as a temporary 'reservation' preventing immediate reuse of recently changed identifiers.
 	c.JSON(http.StatusOK, gin.H{"message": "User deleted"})
 }
+
+// AdminResetPassword handles POST /api/admin/users/:id/reset-password
+func (uc *UserController) AdminResetPassword(c *gin.Context) {
+	id := c.Param("id")
+
+	// 1. Check if user exists
+	if _, err := uc.service.GetUserByID(id); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+		return
+	}
+
+	// 2. Initiate Reset (Generates raw token, hashes it in DB)
+	rawToken, err := uc.service.InitiatePasswordReset(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to initiate reset: " + err.Error()})
+		return
+	}
+
+	// 3. SECURE DELIVERY: Send the actual email
+	userRecord, _ := uc.service.GetUserByID(id)
+	if err := utils.SendResetEmail(userRecord.Email, rawToken); err != nil {
+		c.JSON(http.StatusAccepted, gin.H{
+			"message": "Reset token generated, but failed to send email. Check SMTP config.",
+			"error":   err.Error(),
+			"raw_token": rawToken, // Fallback for manual support
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":    "Reset link sent successfully to " + userRecord.Email,
+		"expires_in": "1 hour",
+	})
+}
+
+// ConfirmResetPassword handles POST /api/users/reset-password/confirm
+func (uc *UserController) ConfirmResetPassword(c *gin.Context) {
+	var req struct {
+		Token       string `json:"token" binding:"required"`
+		NewPassword string `json:"new_password" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Token and new password required"})
+		return
+	}
+
+	if err := uc.service.CompletePasswordReset(c.Request.Context(), req.Token, req.NewPassword); err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Password updated successfully"})
+}
+
+// ForgotPasswordInitiate handles POST /api/users/forgot-password (Public)
+func (uc *UserController) ForgotPasswordInitiate(c *gin.Context) {
+	var req struct {
+		Email string `json:"email" binding:"required,email"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Valid email address required"})
+		return
+	}
+
+	// 1. Fetch User by Email
+	userRecord, err := uc.service.Repo.GetByEmail(c.Request.Context(), req.Email)
+	if err != nil {
+		// SECURITY: We return "Accepted" even if the email doesn't exist.
+		// This prevents "Account Enumeration" (hackers checking which emails have accounts).
+		c.JSON(http.StatusAccepted, gin.H{"message": "If an account exists for this email, a reset link will be sent."})
+		return
+	}
+
+	// 2. Initiate Reset Flow (Token generation + SHA-256 Hashing)
+	rawToken, err := uc.service.InitiatePasswordReset(c.Request.Context(), userRecord.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal error generating reset link"})
+		return
+	}
+
+	// 3. SECURE DELIVERY: Email the token to the user
+	if err := utils.SendResetEmail(userRecord.Email, rawToken); err != nil {
+		// Log internal error but don't leak it
+		c.JSON(http.StatusAccepted, gin.H{"message": "Reset request accepted, but email delivery failed. Support has been notified."})
+		return
+	}
+
+	c.JSON(http.StatusAccepted, gin.H{"message": "If an account exists for this email, a reset link will be sent."})
+}
+

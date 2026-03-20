@@ -46,20 +46,27 @@ func Generate_custom_token(ctx context.Context, authClient *auth.Client, firesto
 
 	// 3. Exchange for token. Use permanent ID if found, otherwise the username-based UID.
 	uid := "uid_" + username
+	role := "guest"
 	if isPermanentUser {
 		uid = doc.Ref.ID
+		// Extract role if it exists in the document
+		if r, ok := doc.Data()["role"].(string); ok {
+			role = r
+		}
 	}
 
-	return exchange_custom_token(ctx, authClient, uid, username)
+	return exchange_custom_token(ctx, authClient, uid, username, role)
 }
 
 func ResetGatekeeper() {
 	bloom_filter.ClearAll()
 }
 
-func exchange_custom_token(ctx context.Context, client *auth.Client, uid string, username string) (string, error) {
+func exchange_custom_token(ctx context.Context, client *auth.Client, uid string, username string, role string) (string, error) {
 	claims := map[string]interface{}{
 		"username": username,
+		"role":     role,
+		"uid":      uid,
 	}
 
 	token, err := client.CustomTokenWithClaims(ctx, uid, claims)

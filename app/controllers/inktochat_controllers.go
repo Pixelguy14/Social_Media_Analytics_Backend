@@ -41,23 +41,23 @@ func (ic *InkController) GetToken(c *gin.Context) {
 }
 
 func (ic *InkController) PostMessage(c *gin.Context) {
+	username, _ := c.Get("username")
 	var req struct {
-		Username string `json:"username" binding:"required"`
-		Room     string `json:"room" binding:"required"`
-		Text     string `json:"text" binding:"required"`
-		Color    string `json:"color"`
+		Room  string `json:"room" binding:"required"`
+		Text  string `json:"text" binding:"required"`
+		Color string `json:"color"`
 	}
 	if err := c.BindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"error": "invalid format"})
 		return
 	}
 
-	if !ic.rateLimiter.Allow("msg_" + req.Username) {
+	if !ic.rateLimiter.Allow("msg_" + username.(string)) {
 		c.JSON(429, gin.H{"error": "Rate limit exceeded"})
 		return
 	}
 
-	if err := ic.chatService.ProcessMessage(c.Request.Context(), req.Room, req.Username, req.Text, req.Color); err != nil {
+	if err := ic.chatService.ProcessMessage(c.Request.Context(), req.Room, username.(string), req.Text, req.Color); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
@@ -65,23 +65,23 @@ func (ic *InkController) PostMessage(c *gin.Context) {
 }
 
 func (ic *InkController) PostDrawing(c *gin.Context) {
+	username, _ := c.Get("username")
 	var req struct {
-		Username string `json:"username" binding:"required"`
-		Room     string `json:"room" binding:"required"`
-		Blob     []byte `json:"blob" binding:"required"`
-		Color    string `json:"color"`
+		Room  string `json:"room" binding:"required"`
+		Blob  []byte `json:"blob" binding:"required"`
+		Color string `json:"color"`
 	}
 	if err := c.BindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"error": "invalid format"})
 		return
 	}
 
-	if !ic.rateLimiter.Allow("draw_" + req.Username) {
+	if !ic.rateLimiter.Allow("draw_" + username.(string)) {
 		c.JSON(429, gin.H{"error": "Rate limit exceeded"})
 		return
 	}
 
-	if err := ic.chatService.ProcessDrawing(c.Request.Context(), req.Room, req.Username, req.Color, req.Blob); err != nil {
+	if err := ic.chatService.ProcessDrawing(c.Request.Context(), req.Room, username.(string), req.Color, req.Blob); err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}

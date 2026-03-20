@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"time"
+	"strings"
 
 	"DataTracker/app/controllers"
 	"DataTracker/app/repositories"
@@ -21,6 +22,7 @@ import (
 	"DataTracker/i18n"
 	"DataTracker/ratelimit"
 	"DataTracker/worker"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 func main() {
@@ -32,9 +34,23 @@ func main() {
 		log.Fatal("Error loading .env file from config/")
 	}
 
-	secretKey := os.Getenv("JWT_SECRET_KEY")
-	if secretKey == "" {
-		log.Fatalf("Error: JWT_SECRET_KEY is not set in environment variables")
+	// 1.5 Load RSA Keys for RS256 JWT
+	privateKeyBytes, err := os.ReadFile("config/private.pem")
+	if err != nil {
+		log.Fatalf("Fatal: Failed to read private RSA key from config/private.pem: %v", err)
+	}
+	privateKey, err := jwt.ParseRSAPrivateKeyFromPEM(privateKeyBytes)
+	if err != nil {
+		log.Fatalf("Fatal: Failed to parse private RSA key: %v", err)
+	}
+
+	publicKeyBytes, err := os.ReadFile("config/public.pem")
+	if err != nil {
+		log.Fatalf("Fatal: Failed to read public RSA key from config/public.pem: %v", err)
+	}
+	publicKey, err := jwt.ParseRSAPublicKeyFromPEM(publicKeyBytes)
+	if err != nil {
+		log.Fatalf("Fatal: Failed to parse public RSA key: %v", err)
 	}
 
 	// 2. Database & Infrastructure Initialization
@@ -79,28 +95,47 @@ func main() {
 
 	// Utilities
 	rateLimiter := ratelimit.NewManager(50, 0.83)
+	// Sensitive Actions: 3 requests per hour (3/3600 = 0.000833 tokens/sec)
+	resetRateLimiter := ratelimit.NewManager(3, 0.000833)
+
 	if err := i18n.Init_localization(); err != nil {
 		log.Printf("i18n init error: %v", err)
 	}
 	worker.Start_all_workers(ctx, firestoreClient)
 
 	// 5. Controllers (Admission Layer)
-	userController := controllers.NewUserController(userService)
+	userController := controllers.NewUserController(userService, privateKey)
 	inkController := controllers.NewInkController(chatService, inkAuthService, analyticsService, rateLimiter)
 
-	// 6. Router & Web Layer
+	// 6. Router & Web Layer (Harden for Production)
+	if os.Getenv("GIN_MODE") == "release" {
+		gin.SetMode(gin.ReleaseMode)
+	}
 	r := gin.Default()
 
+	// Silence the Proxy Warning
+	if err := r.SetTrustedProxies(nil); err != nil {
+		log.Printf("Warning: Could not set trusted proxies: %v", err)
+	}
+
+	// 7. Dynamic CORS Configuration
+	corsOrigins := os.Getenv("CORS_ALLOWED_ORIGINS")
+	allowedOrigins := []string{"http://localhost:5173"} // Default
+	if corsOrigins != "" {
+		allowedOrigins = strings.Split(corsOrigins, ",")
+	}
+	log.Printf("CORS: Allowing origins: %v", allowedOrigins)
+
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"http://localhost:5173", "http://192.168.168.104:5173"},
+		AllowOrigins:     allowedOrigins,
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Authorization", "Content-Type"},
 		AllowCredentials: true,
 	}))
 
 	// Initializing Routes
-	routes.InitializeUserRoutes(r, userController)
-	routes.InitializeInkRoutes(r, inkController)
+	routes.InitializeUserRoutes(r, userController, publicKey, resetRateLimiter)
+	routes.InitializeInkRoutes(r, inkController, publicKey)
 
 	log.Println("Server working on port 8081")
 	if err := r.Run(":8081"); err != nil {

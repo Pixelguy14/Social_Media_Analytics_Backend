@@ -1,5 +1,7 @@
 package models
 
+import "time"
+
 // User represents the system user.
 type User struct {
 	// ID is the Firestore Document ID.
@@ -15,4 +17,11 @@ type User struct {
 	// json:"-" prevents the password from being sent in API responses.
 	// firestore:"password" stores the hashed value in the database.
 	Password string `json:"-" firestore:"password"`
+}
+
+// PasswordResetToken represents a short-lived record for resetting passwords.
+type PasswordResetToken struct {
+	UserID      string    `firestore:"user_id"`
+	HashedToken string    `firestore:"hashed_token"`
+	ExpiresAt   time.Time `firestore:"expires_at"`
 }
